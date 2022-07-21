@@ -1,17 +1,13 @@
 import json, os
-import numpy as np
-
 from test_simulation import *
 
 
 if __name__ == "__main__":
     num_block = 240
     num_line = 3
-    reward_weight = [1, 1, 1]
+    reward_weight = [1, 1]
 
-    # on_time_list = list()
     tardiness_list = list()
-    # earliness_list = list()
     setup_list = list()
     in_queue_list = list()
     rule = "RANDOM"
@@ -72,11 +68,9 @@ if __name__ == "__main__":
         model["Sink"].reset()
 
         env.run()
-        # monitor.save_tracer()
+        monitor.save_tracer()
 
-        # on_time_list.append(monitor.on_time / num_block)
         tardiness_list.append(sum(monitor.tardiness) / num_block)
-        # earliness_list.append(sum(monitor.earliness) / num_block)
         setup_list.append(sum(monitor.setup_list) / model["Sink"].total_finish)
 
         total_in_queue = 0.0
@@ -86,11 +80,7 @@ if __name__ == "__main__":
 
         in_queue_list.append(total_in_queue / num_block)
 
-    # print("On Time Ratio  : {0}".format(round(np.mean(on_time_list), 2)))
     print("Avg. Tardiness : {0}".format(round(np.mean(tardiness_list), 2)))
-    # print("Avg. Earliness : {0}".format(round(np.mean(earliness_list), 2)))
     print("Setup Ratio    : {0}".format(round(np.mean(setup_list), 2)))
     print("Avg. In_queue Time : {0}".format(np.mean(in_queue_list)))
-
-
 
