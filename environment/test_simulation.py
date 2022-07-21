@@ -283,10 +283,6 @@ class Sink:
 
             if difference > 0:  # tardiness
                 self.monitor.tardiness.append(difference)
-            elif difference < 0:  # earliness
-                self.monitor.earliness.append(-difference)
-            elif difference == 0:
-                self.monitor.on_time += 1
 
             self.finished[job.block]["time"].append(self.env.now)
 
@@ -310,8 +306,6 @@ class Monitor:
         self.setup = 0
         self.setup_list = list()
         self.tardiness = list()
-        self.earliness = list()
-        self.on_time = 0
 
     def record(self, time=None, part=None, block=None, event=None, process=None, memo=None):
         self.time.append(round(time, 2))
@@ -345,6 +339,4 @@ class Monitor:
 
         self.setup = 0
         self.tardiness = list()
-        self.earliness = list()
-        self.on_time = 0
 
