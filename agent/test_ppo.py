@@ -1,6 +1,3 @@
-import os
-import pandas as pd
-
 from ppo import *
 from environment.env import WeldingLine
 
@@ -15,9 +12,7 @@ if __name__ == "__main__":
     if not os.path.exists(event_path):
         os.makedirs(event_path)
 
-    # on_time_list = list()
     tardiness_list = list()
-    # earliness_list = list()
     setup_list = list()
     in_queue_list = list()
 
@@ -48,9 +43,7 @@ if __name__ == "__main__":
                 env.monitor.save_tracer()
                 break
 
-        # on_time_list.append(env.monitor.on_time / env.num_block)
         tardiness_list.append(sum(env.monitor.tardiness) / env.num_block)
-        # earliness_list.append(sum(env.monitor.earliness) / env.num_block)
         setup_list.append(sum(env.monitor.setup_list) / env.model["Sink"].total_finish)
 
         total_in_queue = 0.0
@@ -59,8 +52,7 @@ if __name__ == "__main__":
                 0]) / 1440
 
         in_queue_list.append(total_in_queue / env.num_block)
-    # print("On Time Ratio  : {0}".format(round(np.mean(on_time_list), 2)))
+
     print("Avg. Tardiness : {0}".format(round(np.mean(tardiness_list), 2)))
-    # print("Avg. Earliness : {0}".format(round(np.mean(earliness_list), 2)))
     print("Setup Ratio    : {0}".format(round(np.mean(setup_list), 2)))
     print("Avg. In_queue Time : {0}".format(np.mean(in_queue_list)))
