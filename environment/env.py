@@ -1,30 +1,24 @@
 import json
-import numpy as np
-
 from environment.simulation import *
 
 
 class WeldingLine:
-    def __init__(self, num_block=240, num_line=3, start_lag=0, log_dir=None, reward_weight=None):
+    def __init__(self, num_block=240, num_line=3,
+                 start_lag=0, log_dir=None, reward_weight=None):
         self.num_block = num_block
         self.num_line = num_line
         self.start_lag = start_lag
         self.log_dir = log_dir
-        self.reward_weight = reward_weight if reward_weight is not None else [1, 1, 1]
+        self.reward_weight = reward_weight if reward_weight is not None else [1, 1]
 
         with open('../block_sample.json', 'r') as f:
             self.block_sample = json.load(f)
 
         self.done = False
-        self.tardiness = 0.0
         self.e = 1
         self.time = 0
-        self.setup = 0
         self.num_jobs = 0
-
-        self.total_setup = 0
-        self.tardiness = 0
-        self.earliness = 0
+        self.sim_block = dict()
 
         self.sim_env, self.model, self.routing, self.monitor = self._modeling()
 
@@ -59,8 +53,6 @@ class WeldingLine:
 
     def reset(self):
         self.e += 1  # episode
-        self.total_setup = 0
-        self.setup = 0
         self.sim_block = dict()
         self.done = False
 
@@ -71,9 +63,6 @@ class WeldingLine:
             if name != "Source":
                 self.model[name].reset()
         self.routing.reset()
-
-        self.tardiness = 0
-        self.earliness = 0
 
         while True:
             # Check whether there is any decision time step
@@ -87,7 +76,9 @@ class WeldingLine:
         # data modeling
         week3_due_date = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19]
         due_date_list = np.random.choice(week3_due_date, size=self.num_block)
-        # due_date_list = list(np.random.randint(low=0, high=6, size=self.num_block))
+        # due_date_list = list(np.random.randint(low=0, high=6, size=self.num_block))  # Week 1 버전
+
+        # Block Sampling
         block_list = np.random.choice([key for key in self.block_sample.keys()], size=self.num_block)
 
         # simulation object modeling
@@ -95,12 +86,10 @@ class WeldingLine:
         env = simpy.Environment()
         monitor = Monitor(self.log_dir + '/log_{0}.csv'.format(self.e))
         monitor.reset()
-
         model["Source"] = Source(env)
         self.sim_block = dict()
-
         self.num_jobs = 0
-
+        # Steel class로 모델링 + self.sim_block에 블록 저장 + self.num_jobs 계산
         for block_idx in range(len(block_list)):
             block_name = block_list[block_idx]
             block_due_date = due_date_list[block_idx]
@@ -124,13 +113,10 @@ class WeldingLine:
                     self.sim_block["Block_{0}".format(block_idx + 1)]["num_steel"] += 1
                     self.num_jobs += 1
                 steel_idx += 1
-
         routing = Routing(env, model, self.sim_block, monitor)
-
         for i in range(self.num_line):
             model["Line {0}".format(i + 1)] = Process(env, "Line {0}".format(i + 1), model, routing, monitor)
             model["Line {0}".format(i + 1)].reset()
-
         model["Sink"] = Sink(env, self.sim_block, monitor)
         model["Sink"].reset()
 
@@ -269,14 +255,7 @@ class WeldingLine:
 
             if difference_time < 0:  # tardiness
                 self.reward += self.reward_weight[2] * (np.exp(difference_time) - 1)
-            # else:  # earliness
-            #     self.reward += self.reward_weight[1] * (np.exp(-difference_time) - 1)
 
         self.monitor.setup = 0
         self.model["Sink"].finished_block = list()
         return self.reward
-
-
-if __name__ == "__main__":
-    welding_line = WeldingLine()
-    welding_line._modeling()
