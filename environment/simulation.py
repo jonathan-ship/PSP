@@ -144,10 +144,9 @@ class Routing:
 
             routing_rule = yield self.decision
             self.routing_rule = self.mapping[routing_rule]
-
             self.decision = None
             self.monitor.record(time=self.env.now, event="Routing Start", process=location, memo=self.routing_rule)
-            # blocks = [job.block for job in self.model["Source"].queue.items]
+
             if self.routing_rule == "SSPT":
                 next_job = yield self.env.process(self.SSPT())
             elif self.routing_rule == "ATCS":
@@ -265,7 +264,6 @@ class Sink:
         self.block_info = block_info
         self.monitor = monitor
 
-        # 블록별 작업이 종료된 Job의 수
         self.finished = dict()
         self.finished_block = list()
         self.total_finish = 0
@@ -292,10 +290,6 @@ class Sink:
 
             if difference > 0:  # tardiness
                 self.monitor.tardiness.append(difference)
-            elif difference < 0:  # earliness
-                self.monitor.earliness.append(-difference)
-            elif difference == 0:
-                self.monitor.on_time += 1
 
             self.finished[job.block]["time"].append(self.env.now)
 
@@ -320,8 +314,6 @@ class Monitor:
         self.setup = 0
         self.setup_list = list()
         self.tardiness = list()
-        self.earliness = list()
-        self.on_time = 0
 
     def record(self, time=None, part=None, block=None, event=None, process=None, memo=None):
         self.time.append(round(time, 2))
@@ -355,5 +347,3 @@ class Monitor:
 
         self.setup = 0
         self.tardiness = list()
-        self.earliness = list()
-        self.on_time = 0
