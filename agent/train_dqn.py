@@ -1,26 +1,15 @@
 import copy, os
-import numpy as np
-import pandas as pd
 
-import agent.dqn
 from agent.dqn import *
-from environment.env2 import WeldingLine
+from environment.env import WeldingLine
 
 from torch.utils.tensorboard import SummaryWriter
-
+writer = SummaryWriter('scalar/dqn')
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-print(device)
-
-PROJECT = "Case 1"
-HYPERPARAMETER_DICT = dict()
-
-HYPERPARAMETER_DICT["learning rate"] = agent.dqn.learning_rate
 
 
 if __name__ == "__main__":
-    writer = SummaryWriter('scalar/{0}'.format(PROJECT))
-
     num_episode = 100000
     episode = 1
 
@@ -29,11 +18,11 @@ if __name__ == "__main__":
     state_size = 14
     action_size = 4
 
-    log_path = '../result/model/dqn2'
+    log_path = '../result/model/dqn'
     if not os.path.exists(log_path):
         os.makedirs(log_path)
 
-    event_path = '../environment/result/dqn2'
+    event_path = '../environment/result/dqn'
     if not os.path.exists(event_path):
         os.makedirs(event_path)
 
@@ -117,13 +106,9 @@ if __name__ == "__main__":
                 0]) / 1440
 
         writer.add_scalar("Reward/Reward", sum(r), e)
-        # avg_loss = loss / num_update if num_update > 0 else 0
-        # writer.add_scalar("Performance/Loss", avg_loss, e)
+
         writer.add_scalar("Performance/Q-Value", avg_q, e)
         writer.add_scalar("Performance/SetUp", np.sum(env.monitor.setup_list) / env.model["Sink"].total_finish, e)
-        # writer.add_scalar("Performance/On-Time", env.monitor.on_time / env.num_block, e)
         writer.add_scalar("Performance/Tardiness", np.sum(env.monitor.tardiness) / env.num_block, e)
-        # writer.add_scalar("Performance/Earliness", np.sum(env.monitor.earliness) / env.num_block, e)
         writer.add_scalar("Performance/In-Queue-Time", total_in_queue / env.num_block, e)
     writer.close()
-
