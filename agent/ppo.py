@@ -1,4 +1,4 @@
-import os
+import os, json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,20 +7,19 @@ import torch.optim as optim
 from torch.distributions import Categorical
 from environment.env import *
 
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-# Hyperparameters
-learning_rate = 0.0005
-gamma = 0.98
-lmbda = 0.95
-eps_clip = 0.2
-K_epoch = 5
-T_horizon = 50
+# device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+device = torch.device("cpu")
 
 
 class PPO(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, learning_rate=1e-6, gamma=0.98, lmbda=0.5, eps_clip=0.2, K_epoch=5,
+                 T_horizon=50):
         super(PPO, self).__init__()
+        self.gamma = gamma
+        self.lmbda = lmbda
+        self.eps_clip = eps_clip
+        self.K_epoch = K_epoch
+        self.T_horizon = T_horizon
         self.data = []
 
         self.fc1 = nn.Linear(state_dim, 512)
@@ -70,15 +69,15 @@ class PPO(nn.Module):
     def train_net(self):
         s, a, r, s_prime, prob_a, done = self.make_batch()
 
-        for i in range(K_epoch):
-            td_target = r + gamma * self.v(s_prime) * done
+        for i in range(self.K_epoch):
+            td_target = r + self.gamma * self.v(s_prime) * done
             delta = td_target - self.v(s)
             delta = delta.cpu().detach().numpy()
 
             advantage_lst = []
             advantage = 0.0
             for delta_t in delta[::-1]:
-                advantage = gamma * lmbda * advantage + delta_t[0]
+                advantage = self.gamma * self.lmbda * advantage + delta_t[0]
                 advantage_lst.append([advantage])
             advantage_lst.reverse()
             advantage = torch.tensor(advantage_lst, dtype=torch.float).to(device)
@@ -89,9 +88,16 @@ class PPO(nn.Module):
             ratio = torch.exp(torch.log(pi_a) - torch.log(prob_a))  # a/b == exp(log(a)-log(b))
 
             surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1 - eps_clip, 1 + eps_clip) * advantage
-            loss = -torch.min(surr1, surr2) + F.smooth_l1_loss(self.v(s), td_target.detach())
+            surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * advantage
+            loss = -torch.min(surr1, surr2) + 0.5 * F.smooth_l1_loss(self.v(s), td_target.detach())
 
             self.optimizer.zero_grad()
             loss.mean().backward()
             self.optimizer.step()
+
+    def save(self, episode, file_dir):
+        torch.save({"episode": episode,
+                    "model_state_dict": self.state_dict(),
+                    "optimizer_state_dict": self.optimizer.state_dict()},
+                   file_dir + "episode-%d.pt" % episode)
+

@@ -1,24 +1,41 @@
 import json
+import simpy
+import vessl
+import copy
+import numpy as np
 from environment.simulation import *
 
 
 class WeldingLine:
-    def __init__(self, num_block=240, num_line=3,
-                 start_lag=0, log_dir=None, reward_weight=None):
+    def __init__(self, num_block=80, num_line=3, block_sample=None,
+                 rule_weight=0, log_dir=None, reward_weight=None, test_sample=None,
+                 pt_var=0.1, is_train=True):
         self.num_block = num_block
         self.num_line = num_line
-        self.start_lag = start_lag
+        self.rule_weight = rule_weight
         self.log_dir = log_dir
-        self.reward_weight = reward_weight if reward_weight is not None else [1, 1]
+        self.reward_weight = reward_weight if reward_weight is not None else [0.5, 0.5]
+        self.test_sample = test_sample
+        self.block_sample = block_sample
+        self.pt_var = pt_var
+        self.is_train = is_train
 
-        with open('../block_sample.json', 'r') as f:
-            self.block_sample = json.load(f)
+        self.state_size = 14
+        self.action_size = 4
+
+        self.tard_reward = 0.0
+        self.setup_reward = 0.0
+        self.msp_reward = 0.0
 
         self.done = False
-        self.e = 1
+        self.e = 0
         self.time = 0
         self.num_jobs = 0
         self.sim_block = dict()
+
+        self.time_list = list()
+        self.tardiness_ratio_list = list()
+        self.setup_ratio_list = list()
 
         self.sim_env, self.model, self.routing, self.monitor = self._modeling()
 
@@ -38,12 +55,13 @@ class WeldingLine:
             if self.num_jobs == self.model["Sink"].total_finish:
                 done = True
                 self.sim_env.run()
-                if self.e % 50 == 0:
-                    self.monitor.save_tracer()
-                # self.monitor.save_tracer()
+                # if self.e % 50 == 0:
+                #     self.monitor.save_tracer()
+                # # self.monitor.save_tracer()
                 break
             if len(self.sim_env._queue) == 0:
-                self.monitor.save_tracer()
+                self.monitor.get_logs(file_path="Test_ddt.csv")
+                print("Break!")
             self.sim_env.step()
 
         reward = self._calculate_reward()
@@ -52,9 +70,13 @@ class WeldingLine:
         return next_state, reward, done
 
     def reset(self):
-        self.e += 1  # episode
         self.sim_block = dict()
         self.done = False
+        self.tard_reward = 0.0
+        self.setup_reward = 0.0
+
+        if self.is_train:
+            self.pt_var = np.random.uniform(low=0.1, high=0.5)
 
         self.sim_env, self.model, self.routing, self.monitor = self._modeling()
 
@@ -74,49 +96,86 @@ class WeldingLine:
 
     def _modeling(self):
         # data modeling
-        week3_due_date = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19]
-        due_date_list = np.random.choice(week3_due_date, size=self.num_block)
-        # due_date_list = list(np.random.randint(low=0, high=6, size=self.num_block))  # Week 1 버전
+        self.ddt = np.random.uniform(low=0.8, high=1.2)
+        if self.test_sample is None:
+            if self.num_block == 240:
+                week3_due_date = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 18, 19]
+                due_date_list = np.random.choice(week3_due_date, size=self.num_block)
+                iat = (960 * 18) / self.num_block
+            elif self.num_block == 160:
+                week2_due_date = [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]
+                due_date_list = np.random.choice(week2_due_date, size=self.num_block)
+                iat = (960 * 12) / self.num_block
+            else:
+                due_date_list = list(np.random.randint(low=0, high=6, size=self.num_block))  # Week 1 버전
+                iat = (960 * 6) / self.num_block
+        else:
+            due_date_list = self.test_sample["due_date"]
+            if self.num_block == 240:
+                iat = (960 * 18) / self.num_block
+            elif self.num_block == 160:
+                iat = (960 * 12) / self.num_block
+            else:
+                iat = (960 * 6) / self.num_block
 
         # Block Sampling
-        block_list = np.random.choice([key for key in self.block_sample.keys()], size=self.num_block)
+        if self.test_sample is None:
+            block_list = np.random.choice([key for key in self.block_sample.keys()], size=self.num_block)
+        else:
+            block_list = self.test_sample['block_list']
 
         # simulation object modeling
         model = dict()
         env = simpy.Environment()
-        monitor = Monitor(self.log_dir + '/log_{0}.csv'.format(self.e))
+        monitor = Monitor()
         monitor.reset()
-        model["Source"] = Source(env)
+
         self.sim_block = dict()
         self.num_jobs = 0
+        create_dict = dict()
         # Steel class로 모델링 + self.sim_block에 블록 저장 + self.num_jobs 계산
         for block_idx in range(len(block_list)):
             block_name = block_list[block_idx]
-            block_due_date = due_date_list[block_idx]
+            # block_due_date = due_date_list[block_idx]
+            block_data = self.block_sample[block_name]
+            total_pt = 0.0
+            for steel_name in block_data.keys():
+                avg_speed = 1200 - ((block_data[steel_name]["weld_size"] - 4.5) / 0.5) * 50
+                total_pt += (block_data[steel_name]["length"] / avg_speed) * block_data[steel_name]["num_steel"]
 
-            self.sim_block["Block_{0}".format(block_idx + 1)] = dict()
-            self.sim_block["Block_{0}".format(block_idx + 1)]["due_date"] = block_due_date
-            self.sim_block["Block_{0}".format(block_idx + 1)]["num_steel"] = 0
+            create_time = due_date_list[block_idx]
+            block_due_date = math.floor(create_time + ((total_pt * self.ddt) / (24 * 60)))
+            self.sim_block["Block_{0}".format(block_idx)] = dict()
+            self.sim_block["Block_{0}".format(block_idx)]["due_date"] = block_due_date
+            self.sim_block["Block_{0}".format(block_idx)]["num_steel"] = 0
 
-            steel_idx = 1
+            steel_idx = 0
+            block_steel_list = list()
             for steel_name in self.block_sample[block_name].keys():
                 for i in range(self.block_sample[block_name][steel_name]["num_steel"]):
-                    self.sim_block["Block_{0}".format(block_idx + 1)][
-                        "Steel_{0}_{1}_{2}".format(block_idx + 1, steel_idx, i + 1)] = Steel(
-                        name="Steel_{0}_{1}_{2}".format(block_idx + 1, steel_idx, i + 1),
-                        block="Block_{0}".format(block_idx + 1), steel="Steel_{0}_{1}".format(block_idx + 1, steel_idx),
+                    self.sim_block["Block_{0}".format(block_idx)][
+                        "Steel_{0}_{1}_{2}".format(block_idx, steel_idx, i)] = Steel(
+                        name="Steel_{0}_{1}_{2}".format(block_idx, steel_idx, i),
+                        block="Block_{0}".format(block_idx), steel="Steel_{0}_{1}".format(block_idx, steel_idx),
                         feature=self.block_sample[block_name][steel_name], due_date=block_due_date)
-                    model["Source"].queue.put(copy.deepcopy(self.sim_block["Block_{0}".format(block_idx + 1)][
-                                                                "Steel_{0}_{1}_{2}".format(block_idx + 1, steel_idx,
-                                                                                           i + 1)]))
 
-                    self.sim_block["Block_{0}".format(block_idx + 1)]["num_steel"] += 1
+                    block_steel_list.append(copy.deepcopy(self.sim_block["Block_{0}".format(block_idx)][
+                                                              "Steel_{0}_{1}_{2}".format(block_idx, steel_idx,
+                                                                                         i)]))
+                    self.sim_block["Block_{0}".format(block_idx)]["num_steel"] += 1
                     self.num_jobs += 1
                 steel_idx += 1
-        routing = Routing(env, model, self.sim_block, monitor)
+            if create_time not in create_dict.keys():
+                create_dict[create_time] = list()
+            create_dict[create_time].append(copy.deepcopy(block_steel_list))
+
+        routing = Routing(env, model, self.sim_block, monitor, self.num_jobs, weight=self.rule_weight)
+        model["Source"] = Source(env, create_dict, routing, iat, monitor)
+
         for i in range(self.num_line):
-            model["Line {0}".format(i + 1)] = Process(env, "Line {0}".format(i + 1), model, routing, monitor)
-            model["Line {0}".format(i + 1)].reset()
+            model["Line {0}".format(i)] = Process(env, "Line {0}".format(i), model, routing, monitor,
+                                                  pt_var=self.pt_var)
+            model["Line {0}".format(i)].reset()
         model["Sink"] = Sink(env, self.sim_block, monitor)
         model["Sink"].reset()
 
@@ -129,17 +188,17 @@ class WeldingLine:
         f_3 = np.zeros(4)  # Due Date -> Tardiness Level for setup
         f_4 = np.zeros(self.num_line)  # General Info -> 각 라인에서의 남은 작업시간
 
-        input_queue = copy.deepcopy(self.model["Source"].queue.items)
+        input_queue = copy.deepcopy(self.routing.queue.items)
 
         # Feature 1, 4
         for line_num in range(self.num_line):
-            line = self.model["Line {0}".format(line_num + 1)]
+            line = self.model["Line {0}".format(line_num)]
             if line.job is not None:
                 line_feature = line.job.web_face
                 same_setup_list = [1 for job in input_queue if job.web_face == line_feature]
 
                 f_1[line_num] = np.sum(same_setup_list) / len(input_queue) if len(input_queue) > 0 else 0.0
-                f_4[line_num] = (line.planned_finish_time - self.sim_env.now) / line.planned_finish_time if not line.idle else 0
+                f_4[line_num] = (line.planned_finish_time - self.sim_env.now) / (line.planned_finish_time - line.start_time) if not line.idle else 0
             else:
                 f_1[line_num] = 1.0
 
@@ -158,16 +217,17 @@ class WeldingLine:
                     else:
                         setup_list.append(job)
 
-            def _cal_expected_finish_time(avg_pt, num_jobs):
+            def _cal_expected_finish_time(var, job_list):
                 expected_time = self.sim_env.now
-                for _ in range(num_jobs):
-                    if (expected_time + avg_pt) % 1440 <= 960:
-                        expected_time += avg_pt
+                for job in job_list:
+                    pt = job.avg_pt * var
+                    if (expected_time + pt) % 1440 <= 960:
+                        expected_time += pt
                     else:
                         day = math.floor(expected_time / 1440)
                         next_day = day + 1 if day % 7 != 5 else day + 2
                         # next_day = day + 1
-                        expected_time = next_day * 1440 + avg_pt
+                        expected_time = next_day * 1440 + pt
 
                 return expected_time
 
@@ -180,14 +240,14 @@ class WeldingLine:
 
                 for non_setup_job in non_setup_list:
                     job_dd = non_setup_job.due_date * 1440 + 960
-                    finished_jobs = self.model["Sink"].finished[non_setup_job.block]["num"] if non_setup_job.block in \
-                                                                                        self.model[
-                                                                                            "Sink"].finished.keys() else 0
+                    # finished_jobs = self.model["Sink"].finished[non_setup_job.block]["num"] if non_setup_job.block in \
+                    #                                                                     self.model[
+                    #                                                                         "Sink"].finished.keys() else 0
 
-                    num_residual = self.sim_block[non_setup_job.block]["num_steel"] - finished_jobs
-
-                    max_tightness = job_dd - _cal_expected_finish_time(non_setup_job.avg_pt * 1.1, num_residual)
-                    min_tightness = job_dd - _cal_expected_finish_time(non_setup_job.avg_pt * 0.9, num_residual)
+                    # num_residual = self.sim_block[non_setup_job.block]["num_steel"] - finished_jobs
+                    job_list = [job for job in input_queue if job.block == non_setup_job.block]
+                    max_tightness = job_dd - _cal_expected_finish_time(1 + self.pt_var, job_list)
+                    min_tightness = job_dd - _cal_expected_finish_time(1 - self.pt_var, job_list)
 
                     if max_tightness > 0:
                         g_1 += 1
@@ -215,13 +275,12 @@ class WeldingLine:
                 for setup_job in setup_list:
                     job_dd = setup_job.due_date * 1440 + 960
                     finished_jobs = self.model["Sink"].finished[setup_job.block]["num"] if setup_job.block in \
-                                                                                        self.model[
-                                                                                            "Sink"].finished.keys() else 0
+                                                                                           self.model[
+                                                                                               "Sink"].finished.keys() else 0
 
-                    num_residual = self.sim_block[setup_job.block]["num_steel"] - finished_jobs
-
-                    max_tightness = job_dd - _cal_expected_finish_time(setup_job.avg_pt * 1.1, num_residual)
-                    min_tightness = job_dd - _cal_expected_finish_time(setup_job.avg_pt * 0.9, num_residual)
+                    job_list = [job for job in input_queue if job.block == setup_job.block]
+                    max_tightness = job_dd - _cal_expected_finish_time(1 + self.pt_var, job_list)
+                    min_tightness = job_dd - _cal_expected_finish_time(1 - self.pt_var, job_list)
 
                     if max_tightness > 0:
                         g_1 += 1
@@ -243,9 +302,11 @@ class WeldingLine:
         return state
 
     def _calculate_reward(self):
-        self.reward = 0
+        reward = 0
         # setup
-        self.reward -= self.reward_weight[0] * self.monitor.setup * 0.1
+        if self.routing.setup:
+            reward -= 0.1 * self.reward_weight[1]
+            self.setup_reward -= 0.1
 
         # Earliness / Tardiness
         for block_info in self.model["Sink"].finished_block:
@@ -254,8 +315,23 @@ class WeldingLine:
             difference_time = self.sim_block[block_name]["due_date"] - completed_time
 
             if difference_time < 0:  # tardiness
-                self.reward += self.reward_weight[2] * (np.exp(difference_time) - 1)
-
-        self.monitor.setup = 0
+                # self.reward += self.reward_weight[2] * (np.exp(difference_time) - 1)  # vessl experiment 5, 6, 7, 10에는 존재
+                reward += (np.exp(difference_time) - 1) * self.reward_weight[0]
+                self.tard_reward += (np.exp(difference_time) - 1)
+            # elif difference_time > 0:  # earliness, vessl experiment 5, 6, 7, 10에는 존재
+            #     self.reward += np.exp(-difference_time) - 1
         self.model["Sink"].finished_block = list()
-        return self.reward
+
+        # # makespan
+        # self.msp_reward = (4 + int((self.num_block / 80))) * (self.routing.created / self.num_jobs) - self.model["Sink"].makespan0
+
+        return reward
+
+    def get_logs(self, path=None):
+        log = self.monitor.get_logs(path)
+        return log
+
+
+if __name__ == "__main__":
+    welding_line = WeldingLine()
+    welding_line._modeling()
